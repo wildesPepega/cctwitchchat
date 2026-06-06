@@ -14,11 +14,11 @@
 --  Usage: edit twitch  ->  paste  ->  run: twitch
 -- =====================================================
 
-local VERSION = "1.1"
+local VERSION = "1.2"
 
 -- ---- Update source (edit these to point at YOUR repo) ----
-local REPO_USER   = "YOUR_GITHUB_USERNAME"
-local REPO_NAME   = "YOUR_REPO_NAME"
+local REPO_USER   = "wildesPepega"
+local REPO_NAME   = "cctwitchchat"
 local REPO_BRANCH = "main"
 local VER_URL  = ("https://raw.githubusercontent.com/%s/%s/%s/version.txt"):format(REPO_USER, REPO_NAME, REPO_BRANCH)
 local CODE_URL = ("https://raw.githubusercontent.com/%s/%s/%s/twitch.lua"):format(REPO_USER, REPO_NAME, REPO_BRANCH)
@@ -140,21 +140,73 @@ if monitor then
 end
 
 -- =====================================================
---  UTF-8 HANDLING (CC has no full UTF-8 terminal)
+--  UTF-8 HANDLING
+--  This CC build uses Latin-1 byte display (ae=228 etc.), so we convert
+--  between UTF-8 (Twitch) and single-byte Latin-1 (CC) in both directions.
 -- =====================================================
-local utf8map = {
-  ["\195\164"]="ae", ["\195\182"]="oe", ["\195\188"]="ue",
-  ["\195\132"]="Ae", ["\195\150"]="Oe", ["\195\156"]="Ue",
-  ["\195\159"]="ss",
-  ["\226\130\172"]="EUR",
-  ["\226\128\153"]="'", ["\226\128\152"]="'",
-  ["\226\128\156"]='"', ["\226\128\157"]='"',
-  ["\226\128\147"]="-", ["\226\128\148"]="-",
-}
+-- =====================================================
+--  INCOMING DECODING (UTF-8 from Twitch -> CC Latin-1 bytes)
+--  Twitch sends UTF-8. This CC build can show Latin-1 bytes directly,
+--  so we decode UTF-8 and keep codepoints <=255 as a single byte.
+--  Codepoints above 255 (emoji etc.) can't be shown -> '?'.
+-- =====================================================
 local function sanitize(str)
-  for seq, repl in pairs(utf8map) do str = str:gsub(seq, repl) end
-  str = str:gsub("[\128-\255]", "?")
-  return str
+  local out = {}
+  local i = 1
+  local n = #str
+  while i <= n do
+    local b = str:byte(i)
+    if b < 0x80 then
+      out[#out+1] = string.char(b)
+      i = i + 1
+    elseif b >= 0xC0 and b < 0xE0 then
+      -- 2-byte sequence
+      local b2 = str:byte(i+1) or 0
+      local cp = (b - 0xC0) * 0x40 + (b2 - 0x80)
+      out[#out+1] = (cp <= 255) and string.char(cp) or "?"
+      i = i + 2
+    elseif b >= 0xE0 and b < 0xF0 then
+      -- 3-byte sequence (always > 255) -> not displayable
+      out[#out+1] = "?"
+      i = i + 3
+    elseif b >= 0xF0 then
+      -- 4-byte sequence (emoji etc.)
+      out[#out+1] = "?"
+      i = i + 4
+    else
+      -- stray continuation byte
+      out[#out+1] = "?"
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+
+-- =====================================================
+--  OUTGOING ENCODING (CC -> UTF-8 for Twitch)
+--  This CC build stores chars as Latin-1/Unicode bytes (e.g. ae=228),
+--  so any byte 128..255 IS the Unicode codepoint and just needs UTF-8 encoding.
+-- =====================================================
+local function utf8encode(cp)
+  if cp < 0x80 then
+    return string.char(cp)
+  elseif cp < 0x800 then
+    return string.char(0xC0 + math.floor(cp / 0x40),
+                       0x80 + (cp % 0x40))
+  else
+    return string.char(0xE0 + math.floor(cp / 0x1000),
+                       0x80 + (math.floor(cp / 0x40) % 0x40),
+                       0x80 + (cp % 0x40))
+  end
+end
+
+local function toUTF8(str)
+  local out = {}
+  for i = 1, #str do
+    local b = str:byte(i)
+    out[#out+1] = utf8encode(b)  -- byte value == codepoint for Latin-1
+  end
+  return table.concat(out)
 end
 
 -- =====================================================
@@ -519,7 +571,7 @@ local function sender()
       systemLine("Now writing to: " .. CHANNEL, colors.lime)
 
     elseif input ~= "" then
-      ws.send("PRIVMSG " .. CHANNEL .. " :" .. input)
+      ws.send("PRIVMSG " .. CHANNEL .. " :" .. toUTF8(input))
       printChatLine(NICK, input, colorForUser(NICK))
     end
   end
