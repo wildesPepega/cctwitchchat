@@ -1,6 +1,6 @@
 -- =====================================================
 --  Twitch Chat Client for CC: Tweaked
---  Version 1.0
+--  Version 1.6
 --
 --  Features:
 --    - Login stored locally (obfuscated), hidden token entry
