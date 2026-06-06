@@ -5,6 +5,8 @@ computer or turtle. Read and write Twitch chat in-game, show the chat history
 on an attached monitor, see real Twitch name colors, highlight your own
 mentions, mark 7TV emotes, and auto-update straight from this GitHub repo.
 
+**Version:** 1.6
+
 ---
 
 ## Features
@@ -23,6 +25,17 @@ mentions, mark 7TV emotes, and auto-update straight from this GitHub repo.
 - **7TV emote highlighting** – global and channel 7TV emote *names* are colored
   in the message text (the images themselves cannot be shown – CC has no way to
   render pictures).
+- **Delivery confirmation** – your own messages are only displayed once Twitch
+  echoes them back, proving they were sent. Rejected messages show a red
+  "Not delivered" notice with the reason.
+- **UTF-8 send/receive** – umlauts and other Latin-1 characters are encoded to
+  UTF-8 when sending and decoded back when receiving, so they show correctly on
+  both sides.
+- **Dynamic word wrap** – long messages wrap at word boundaries, wrapped
+  independently for the terminal width and the monitor width.
+- **Monitor scrolling** – tap the up/down arrows in the monitor's right column
+  to scroll the history (requires an Advanced Monitor); tap elsewhere to jump
+  back to newest.
 - **Auto-update** – on launch the script checks this repo's `version.txt`; if a
   newer version exists it downloads the new `twitch.lua`, overwrites itself, and
   reboots.
@@ -73,8 +86,8 @@ On first launch you'll be asked for your Twitch username and OAuth token
 Open `twitch.lua` and edit these lines near the top to point at your own repo:
 
 ```lua
-local REPO_USER   = "YOUR_GITHUB_USERNAME"
-local REPO_NAME   = "YOUR_REPO_NAME"
+local REPO_USER   = "wildesPepega"
+local REPO_NAME   = "cctwitchchat"
 local REPO_BRANCH = "main"
 ```
 
