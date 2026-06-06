@@ -5,8 +5,6 @@ computer or turtle. Read and write Twitch chat in-game, show the chat history
 on an attached monitor, see real Twitch name colors, highlight your own
 mentions, mark 7TV emotes, and auto-update straight from this GitHub repo.
 
-**Version:** 1.0
-
 ---
 
 ## Features
