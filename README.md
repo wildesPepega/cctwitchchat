@@ -48,7 +48,7 @@ mentions, mark 7TV emotes, and auto-update straight from this GitHub repo.
 On the in-game computer:
 
 ```
-wget https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME/main/twitch.lua twitch
+wget https://raw.githubusercontent.com/wildesPepega/cctwitchchat/main/twitch.lua twitch
 ```
 
 Or paste it manually:
