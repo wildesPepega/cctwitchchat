@@ -14,11 +14,11 @@
 --  Usage: edit twitch  ->  paste  ->  run: twitch
 -- =====================================================
 
-local VERSION = "1.0"
+local VERSION = "1.1"
 
 -- ---- Update source (edit these to point at YOUR repo) ----
-local REPO_USER   = "wildesPepega"
-local REPO_NAME   = "cctwitchchat"
+local REPO_USER   = "YOUR_GITHUB_USERNAME"
+local REPO_NAME   = "YOUR_REPO_NAME"
 local REPO_BRANCH = "main"
 local VER_URL  = ("https://raw.githubusercontent.com/%s/%s/%s/version.txt"):format(REPO_USER, REPO_NAME, REPO_BRANCH)
 local CODE_URL = ("https://raw.githubusercontent.com/%s/%s/%s/twitch.lua"):format(REPO_USER, REPO_NAME, REPO_BRANCH)
@@ -210,6 +210,13 @@ local function parseColor(tagPart)
   local hex = tagPart:match("color=(#%x%x%x%x%x%x)")
   if hex then return hexToCC(hex) end
   return nil
+end
+
+-- Twitch sends a unique per-message id in the tags (id=...). We use it to
+-- guarantee each message is shown exactly once, no matter how it arrives.
+local function parseMsgId(tagPart)
+  if not tagPart then return nil end
+  return tagPart:match("id=([%w%-]+)")
 end
 
 -- =====================================================
@@ -408,8 +415,26 @@ end
 showHelp()
 
 -- =====================================================
---  LISTENER (line-by-line, no duplicates)
+--  LISTENER (line-by-line, de-duplicated)
 -- =====================================================
+-- Remember recently seen message ids so a message is never shown twice,
+-- regardless of duplicate JOINs, repeated frames, or server resends.
+local seenIds = {}        -- id -> true
+local seenOrder = {}      -- queue of ids to cap memory
+local SEEN_MAX = 300
+
+local function alreadySeen(id)
+  if not id then return false end
+  if seenIds[id] then return true end
+  seenIds[id] = true
+  table.insert(seenOrder, id)
+  if #seenOrder > SEEN_MAX then
+    local old = table.remove(seenOrder, 1)
+    seenIds[old] = nil
+  end
+  return false
+end
+
 local function handleLine(line)
   if line == "" then return end
   if line:sub(1, 4) == "PING" then
@@ -420,15 +445,18 @@ local function handleLine(line)
   local tagPart, rest = line:match("^@([^ ]+) (.+)$")
   if not tagPart then rest = line end
 
-  local userColor = parseColor(tagPart)
-
   local user, text = rest:match("^:([%w_]+)![^ ]* PRIVMSG [^ ]+ :(.+)")
-  if user and text then
-    text = text:gsub("[\r\n]", "")
-    if user:lower() ~= NICK:lower() then
-      printChatLine(user, text, userColor)
-    end
-  end
+  if not (user and text) then return end
+
+  text = text:gsub("[\r\n]", "")
+  if user:lower() == NICK:lower() then return end  -- own echo, shown locally
+
+  -- de-dup: prefer the unique Twitch id; fall back to a user+text fingerprint
+  local id = parseMsgId(tagPart) or (user .. "|" .. text)
+  if alreadySeen(id) then return end
+
+  local userColor = parseColor(tagPart)
+  printChatLine(user, text, userColor)
 end
 
 local function listener()
@@ -477,8 +505,12 @@ local function sender()
 
     elseif input:match("^/join ") then
       local ch = "#" .. input:match("^/join (.+)"):gsub("^#", ""):lower()
-      ws.send("JOIN " .. ch); joined[ch] = true
-      systemLine("Joined: " .. ch, colors.lime)
+      if joined[ch] then
+        systemLine("Already joined: " .. ch, colors.yellow)
+      else
+        ws.send("JOIN " .. ch); joined[ch] = true
+        systemLine("Joined: " .. ch, colors.lime)
+      end
 
     elseif input:match("^/switch ") then
       local ch = "#" .. input:match("^/switch (.+)"):gsub("^#", ""):lower()
