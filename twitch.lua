@@ -14,7 +14,7 @@
 --  Usage: edit twitch  ->  paste  ->  run: twitch
 -- =====================================================
 
-local VERSION = "1.2"
+local VERSION = "1.5"
 
 -- ---- Update source (edit these to point at YOUR repo) ----
 local REPO_USER   = "wildesPepega"
@@ -30,7 +30,7 @@ local IRC_URL = "wss://irc-ws.chat.twitch.tv:443"
 --  AUTO-UPDATER
 -- =====================================================
 local function checkUpdate()
-  if REPO_USER == "YOUR_GITHUB_USERNAME" then return end -- not configured yet
+  if REPO_USER == "" or REPO_NAME == "" then return end -- not configured
   local ok, r = pcall(http.get, VER_URL)
   if not ok or not r then return end
   local remote = r.readAll():gsub("%s+", "")
@@ -336,49 +336,166 @@ local function loadEmotes(channelLogin, logFn)
 end
 
 -- =====================================================
+--  WORD WRAP
+--  Wrap a string to a given width at word boundaries.
+--  Continuation lines get an indent so they line up under the message.
+-- =====================================================
+local function wrapText(str, width, indent)
+  indent = indent or 0
+  if width < 1 then width = 1 end
+  local lines = {}
+  local pad = string.rep(" ", indent)
+  local current = ""
+
+  local function isEmpty() return current == "" or current == pad end
+  local function pushLine()
+    table.insert(lines, current)
+    current = pad
+  end
+
+  for word in str:gmatch("%S+") do
+    -- a single word longer than the available width: hard-split it
+    while #current + #word + (isEmpty() and 0 or 1) > width and #word > (width - #pad) do
+      if isEmpty() then
+        local take = width - #current
+        if take < 1 then take = 1 end
+        current = current .. word:sub(1, take)
+        word = word:sub(take + 1)
+        pushLine()
+      else
+        pushLine()
+      end
+    end
+    if isEmpty() then
+      current = current .. word
+    elseif #current + 1 + #word <= width then
+      current = current .. " " .. word
+    else
+      pushLine()
+      current = current .. word
+    end
+  end
+  if not isEmpty() then table.insert(lines, current) end
+  if #lines == 0 then lines = { "" } end
+  return lines
+end
+
+-- =====================================================
 --  DISPLAY
 -- =====================================================
 local history = {}
 local MAX_HISTORY = 200
+local scrollOffset = 0   -- 0 = bottom (newest). Higher = scrolled up.
 
 local function redrawMonitor()
   if not monitor then return end
+  monitor.setBackgroundColor(colors.black)
   monitor.clear()
   local w, h = monitor.getSize()
-  local startLine = math.max(1, #history - h + 1)
+  local textW = w - 1            -- reserve last column for the scroll arrows
+  if textW < 1 then textW = w end
+
+  -- clamp scroll offset to valid range
+  local maxOffset = math.max(0, #history - h)
+  if scrollOffset > maxOffset then scrollOffset = maxOffset end
+  if scrollOffset < 0 then scrollOffset = 0 end
+
+  -- which slice of history to show
+  local endLine = #history - scrollOffset
+  local startLine = math.max(1, endLine - h + 1)
   local row = 1
-  for i = startLine, #history do
+  for i = startLine, endLine do
     local line = history[i]
-    monitor.setCursorPos(1, row)
-    if line.highlight then
-      monitor.setBackgroundColor(colors.gray)
-    else
-      monitor.setBackgroundColor(colors.black)
+    if line then
+      monitor.setCursorPos(1, row)
+      if line.highlight then
+        monitor.setBackgroundColor(colors.gray)
+      else
+        monitor.setBackgroundColor(colors.black)
+      end
+      monitor.setTextColor(line.color or colors.white)
+      monitor.write(line.text:sub(1, textW))
     end
-    monitor.setTextColor(line.color or colors.white)
-    monitor.write(line.text:sub(1, w))
     row = row + 1
   end
+
+  -- draw scroll arrows in the last column (top = up, bottom = down)
+  monitor.setBackgroundColor(colors.gray)
+  monitor.setTextColor(scrollOffset < maxOffset and colors.white or colors.lightGray)
+  monitor.setCursorPos(w, 1)
+  monitor.write("^")
+  monitor.setTextColor(scrollOffset > 0 and colors.white or colors.lightGray)
+  monitor.setCursorPos(w, h)
+  monitor.write("v")
   monitor.setBackgroundColor(colors.black)
 end
 
 local function pushMonitorLine(text, color, highlight)
-  table.insert(history, { text = text, color = color or colors.white, highlight = highlight })
+  if not monitor then return end
+  local w = select(1, monitor.getSize())
+  local textW = w - 1            -- reserve last column for arrows
+  if textW < 1 then textW = w end
+  -- wrap to monitor text width, indent continuation lines by 2
+  local wrapped = wrapText(text, textW, 2)
+  local atBottom = (scrollOffset == 0)
+  for _, ln in ipairs(wrapped) do
+    table.insert(history, { text = ln, color = color or colors.white, highlight = highlight })
+  end
   while #history > MAX_HISTORY do table.remove(history, 1) end
+  -- if the user was at the bottom, stay pinned to newest; otherwise keep
+  -- their scroll position steady as new lines arrive
+  if not atBottom then
+    scrollOffset = scrollOffset + #wrapped
+  end
   redrawMonitor()
 end
 
 -- write the message text to the terminal, coloring emote words
-local function writeTerminalText(text)
-  for word, sep in text:gmatch("([^%s]+)(%s*)") do
-    if emoteSet[word:lower()] then
-      term.setTextColor(EMOTE_COLOR)
-    else
-      term.setTextColor(colors.white)
+-- write message text to terminal with word wrap + emote coloring.
+-- startCol = column where the text begins (after the prefix);
+-- continuation lines indent to that same column.
+local function writeTerminalText(text, startCol)
+  local w = select(1, term.getSize())
+  local indent = startCol - 1
+  if indent < 0 then indent = 0 end
+  if indent > w - 4 then indent = 0 end  -- prefix too wide; don't indent
+  local pad = string.rep(" ", indent)
+
+  local col = startCol  -- current cursor column (1-based)
+
+  for word in text:gmatch("%S+") do
+    local wlen = #word
+    -- need a space before the word unless we're at the start of a line
+    local needSpace = (col > startCol) and 1 or 0
+
+    -- wrap if the word (plus leading space) won't fit
+    if col + needSpace + wlen - 1 > w and col > startCol then
+      print("")               -- new line
+      write(pad)
+      col = indent + 1
+      needSpace = 0
     end
+
+    if needSpace == 1 then write(" "); col = col + 1 end
+
+    -- a word longer than the line width: hard-split across lines
+    while wlen > w - indent do
+      local space = w - col + 1
+      if space < 1 then
+        print(""); write(pad); col = indent + 1; space = w - col + 1
+      end
+      local part = word:sub(1, space)
+      term.setTextColor(emoteSet[word:lower()] and EMOTE_COLOR or colors.white)
+      write(part); term.setTextColor(colors.white)
+      word = word:sub(space + 1)
+      wlen = #word
+      print(""); write(pad); col = indent + 1
+    end
+
+    term.setTextColor(emoteSet[word:lower()] and EMOTE_COLOR or colors.white)
     write(word)
     term.setTextColor(colors.white)
-    if sep ~= "" then write(sep) end
+    col = col + wlen
   end
   print("")
 end
@@ -391,14 +508,15 @@ local function printChatLine(user, text, userColor)
   local mentioned = text:lower():find(NICK:lower(), 1, true) ~= nil
 
   -- Terminal
+  local prefix = "[" .. timestamp() .. "] " .. user .. ": "
   if mentioned then term.setBackgroundColor(colors.gray) end
   term.setTextColor(colors.lightGray); write("[" .. timestamp() .. "] ")
   term.setTextColor(userColor); write(user)
   term.setTextColor(colors.lightGray); write(": ")
-  writeTerminalText(text)
+  writeTerminalText(text, #prefix + 1)
   term.setBackgroundColor(colors.black)
 
-  -- Monitor (single color per line; emotes can't be per-word colored cheaply here)
+  -- Monitor (wrapped to monitor width inside pushMonitorLine)
   pushMonitorLine("[" .. timestamp() .. "] " .. user .. ": " .. text,
                   userColor, mentioned)
 end
@@ -448,7 +566,7 @@ end
 
 ws.send("PASS " .. TOKEN)
 ws.send("NICK " .. NICK)
-ws.send("CAP REQ :twitch.tv/tags")
+ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands")
 ws.send("JOIN " .. CHANNEL)
 systemLine("Connected to " .. CHANNEL, colors.lime)
 
@@ -487,6 +605,10 @@ local function alreadySeen(id)
   return false
 end
 
+-- Queue of our own messages awaiting server confirmation (FIFO).
+-- We only display them once Twitch echoes them back (proof of delivery).
+local pending = {}   -- list of { text=..., channel=... }
+
 local function handleLine(line)
   if line == "" then return end
   if line:sub(1, 4) == "PING" then
@@ -497,11 +619,29 @@ local function handleLine(line)
   local tagPart, rest = line:match("^@([^ ]+) (.+)$")
   if not tagPart then rest = line end
 
+  -- NOTICE = server feedback, often a rejection reason for our message
+  local noticeText = rest:match("^:[^ ]* NOTICE [^ ]+ :(.+)")
+  if noticeText then
+    noticeText = noticeText:gsub("[\r\n]", "")
+    -- a rejected message stays pending; drop the oldest so it isn't shown
+    if #pending > 0 then table.remove(pending, 1) end
+    systemLine("Not delivered: " .. sanitize(noticeText), colors.red)
+    return
+  end
+
   local user, text = rest:match("^:([%w_]+)![^ ]* PRIVMSG [^ ]+ :(.+)")
   if not (user and text) then return end
 
   text = text:gsub("[\r\n]", "")
-  if user:lower() == NICK:lower() then return end  -- own echo, shown locally
+
+  -- our own message echoed back as PRIVMSG = confirmation it was delivered.
+  -- this is the only signal carrying both the text and a unique id, so we
+  -- rely on it exclusively to display own messages.
+  if user:lower() == NICK:lower() then
+    if #pending > 0 then table.remove(pending, 1) end
+    printChatLine(user, text, colorForUser(NICK))
+    return
+  end
 
   -- de-dup: prefer the unique Twitch id; fall back to a user+text fingerprint
   local id = parseMsgId(tagPart) or (user .. "|" .. text)
@@ -541,7 +681,8 @@ local function sender()
 
     elseif input == "/clear" then
       history = {}
-      if monitor then monitor.clear() end
+      scrollOffset = 0
+      if monitor then redrawMonitor() end
       systemLine("History cleared.", colors.gray)
 
     elseif input == "/channels" then
@@ -571,10 +712,41 @@ local function sender()
       systemLine("Now writing to: " .. CHANNEL, colors.lime)
 
     elseif input ~= "" then
+      table.insert(pending, { text = input, channel = CHANNEL })
       ws.send("PRIVMSG " .. CHANNEL .. " :" .. toUTF8(input))
-      printChatLine(NICK, input, colorForUser(NICK))
+      -- not shown yet; appears once Twitch echoes it back (confirmed delivery)
     end
   end
 end
 
-parallel.waitForAny(sender, listener)
+-- =====================================================
+--  MONITOR TOUCH (scroll arrows)
+--  Requires an Advanced Monitor. Tapping the top-right cell scrolls up,
+--  the bottom-right cell scrolls down. Other taps jump to newest.
+-- =====================================================
+local function touchHandler()
+  if not monitor then
+    -- nothing to handle; sleep forever so parallel keeps the others running
+    while true do os.pullEvent("monitor_touch") end
+  end
+  while true do
+    local _, side, x, y = os.pullEvent("monitor_touch")
+    local w, h = monitor.getSize()
+    local step = math.max(1, math.floor(h / 2))
+    if x >= w then
+      -- clicked the arrow column
+      if y <= math.floor(h / 2) then
+        scrollOffset = scrollOffset + step      -- up = older
+      else
+        scrollOffset = scrollOffset - step      -- down = newer
+      end
+      redrawMonitor()
+    else
+      -- tap anywhere else jumps back to newest
+      scrollOffset = 0
+      redrawMonitor()
+    end
+  end
+end
+
+parallel.waitForAny(sender, listener, touchHandler)
