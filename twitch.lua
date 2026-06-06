@@ -14,7 +14,7 @@
 --  Usage: edit twitch  ->  paste  ->  run: twitch
 -- =====================================================
 
-local VERSION = "1.5"
+local VERSION = "1.6"
 
 -- ---- Update source (edit these to point at YOUR repo) ----
 local REPO_USER   = "wildesPepega"
