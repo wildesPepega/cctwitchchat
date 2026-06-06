@@ -254,7 +254,12 @@ local function colorForUser(name)
 end
 
 local function timestamp()
-  return textutils.formatTime(os.time(), true)
+  -- os.epoch("local") gives real wall-clock ms since 1970 (unlike os.time(),
+  -- which is in-game day time). Convert to HH:MM in local time.
+  local secs = math.floor(os.epoch("local") / 1000)
+  local h = math.floor(secs / 3600) % 24
+  local m = math.floor(secs / 60) % 60
+  return string.format("%02d:%02d", h, m)
 end
 
 local function parseColor(tagPart)
